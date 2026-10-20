@@ -1,0 +1,29 @@
+{
+    "name": "identvia/identvia-php",
+    "description": "Sign in with Identvia for PHP: OpenID Connect with PKCE, state/nonce, ID token validation via cached JWKS, userinfo. Works on plain shared hosting, no framework needed.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["identvia", "openid connect", "oidc", "oauth2", "pkce", "sso", "login"],
+    "homepage": "https://identvia.com/developers/docs/php",
+    "require": {
+        "php": ">=8.1",
+        "ext-json": "*",
+        "ext-openssl": "*",
+        "firebase/php-jwt": "^6.10"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.5"
+    },
+    "suggest": {
+        "ext-curl": "Faster HTTP; the SDK falls back to PHP streams without it",
+        "ext-apcu": "Keeps the JWKS/discovery cache in memory instead of files"
+    },
+    "autoload": {
+        "psr-4": { "Identvia\\Sdk\\": "src/" }
+    },
+    "autoload-dev": {
+        "psr-4": { "Identvia\\Sdk\\Tests\\": "tests/" }
+    },
+    "config": { "sort-packages": true, "platform": { "php": "8.1.0" } },
+    "minimum-stability": "stable"
+}

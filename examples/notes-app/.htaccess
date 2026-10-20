@@ -1,0 +1,2 @@
+# If you can't point the web root at public/, this keeps config.php, vendor/ and storage/ private.
+Require all denied
