@@ -53,9 +53,11 @@ final class Identvia
     private ?array $discovery = null;
 
     /**
-     * @param array{issuer:string, client_id:string, client_secret?:?string, redirect_uri:string, scopes?:list<string>,
-     *   token_auth?:'client_secret_basic'|'client_secret_post', leeway?:int, timeout?:int, ca_bundle?:?string,
-     *   cache_dir?:?string, cache?:Cache, http?:HttpClient, state_store?:StateStore, clock?:\Closure} $config
+     * Options (validated at runtime, because they usually come from getenv() or a config file):
+     *   issuer, client_id, redirect_uri (required strings); client_secret (?string); scopes (list<string>);
+     *   token_auth ('client_secret_basic'|'client_secret_post'); leeway, timeout (int); ca_bundle, cache_dir (?string);
+     *   cache (Cache); http (HttpClient); state_store (StateStore); clock (\Closure(): int).
+     * @param array<string, mixed> $config
      */
     public function __construct(array $config)
     {

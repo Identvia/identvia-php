@@ -13,13 +13,15 @@ Plain PHP 8.1+, no framework, no database; notes are saved as JSON files in `sto
 
 ## Deploy on shared hosting (cPanel)
 
-* Upload the folder (it already contains `vendor/` in the SDK download) and point the domain's
-  document root at `public/`. If you can't, the `.htaccess` files keep `config.php`, `vendor/`
-  and `storage/` private.
+* Upload the whole `identvia-php/` folder from the SDK download (it already contains `vendor/`;
+  the example loads `../../vendor/autoload.php`) and point the domain's document root at
+  `identvia-php/examples/notes-app/public/`. If you can't change the document root, the `.htaccess`
+  files keep `config.php` and `storage/` private.
 * Add a **Production** environment in the console with `https://your-domain/callback.php` and put its
   credentials in `config.php` (or the `IDENTVIA_*` environment variables).
 * Make `storage/` writable by PHP.
 
 What the files do: `login.php` starts sign-in, `callback.php` finishes it (state, PKCE, nonce and the
-ID token are all checked by the SDK), `logout.php` revokes the refresh token and ends the session.
+ID token are all checked by the SDK), `logout.php` revokes the tokens at Identvia and ends the session.
+`callback.php` also calls the userinfo endpoint to show how (the SDK checks its `sub` matches the ID token).
 The pages send a strict Content-Security-Policy; the button script is allowed from the issuer only.
