@@ -22,7 +22,17 @@ try {
 }
 
 session_regenerate_id(true); // new session ID after login (session fixation)
-$_SESSION['user'] = ['sub' => $signIn->sub(), 'email' => $signIn->email(), 'name' => $signIn->name()];
+$claims = ['sub' => $signIn->sub(), 'email' => $signIn->email(), 'name' => $signIn->name()];
+// ID tokens carry email/name; if your app needs the freshest profile, ask the userinfo endpoint.
+// The SDK checks that userinfo's "sub" matches the ID token's.
+try {
+    $profile = identvia()->userinfo($signIn->tokens->accessToken, $signIn->sub());
+    $claims['email'] = $profile['email'] ?? $claims['email'];
+    $claims['name'] = $profile['name'] ?? $claims['name'];
+} catch (IdentviaException $e) {
+    error_log('Identvia userinfo failed: ' . $e->getMessage()); // the ID token claims are still good
+}
+$_SESSION['user'] = $claims;
 // Keep tokens server-side only if you need to call Identvia later (userinfo, refresh, revoke).
 $_SESSION['tokens'] = $signIn->tokens->toArray();
 header('Location: ' . ($signIn->returnTo ?? '/'), true, 303);
