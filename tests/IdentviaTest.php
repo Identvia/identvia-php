@@ -336,4 +336,90 @@ final class IdentviaTest extends TestCase
         $this->assertNotNull($s->pull('s14'));
         $this->assertNull($s->pull('s0'), 'oldest evicted');
     }
+
+    public function testAuthorizationDetailsInSignInUrl(): void
+    {
+        $url = $this->sdk()->authorizationUrl(['authorization_details' => [['type' => 'agent_task', 'actions' => ['read']]]]);
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
+        $this->assertSame([['type' => 'agent_task', 'actions' => ['read']]], json_decode($q['authorization_details'], true));
+        $this->expectException(\Identvia\Sdk\Exception\ConfigurationException::class);
+        $this->sdk()->authorizationUrl(['authorization_details' => [['actions' => ['read']]]]);
+    }
+
+    public function testTokenExchange(): void
+    {
+        $t = $this->sdk()->tokenExchange($this->idp->accessToken, audience: 'oid_other', scope: 'openid email', actorToken: 'eyJ.actor.jwt',
+            authorizationDetails: [['type' => 'agent_task', 'actions' => ['read']]]);
+        $this->assertSame('at_exchanged', $t->accessToken);
+        $this->assertSame(Identvia::TOKEN_TYPE_ACCESS, $t->issuedTokenType);
+        $this->assertNull($t->refreshToken);
+        $this->assertSame([['type' => 'agent_task', 'actions' => ['read']]], $t->authorizationDetails);
+        $f = $this->idp->lastForm;
+        $this->assertSame('oid_other', $f['audience']);
+        $this->assertSame(Identvia::TOKEN_TYPE_JWT, $f['actor_token_type']);
+        $this->assertSame('eyJ.actor.jwt', $f['actor_token']);
+        $this->assertArrayNotHasKey('client_secret', $f, 'client auth goes in the Authorization header');
+    }
+
+    public function testTokenExchangeErrorsSurface(): void
+    {
+        try {
+            $this->sdk()->tokenExchange('not-a-token');
+            $this->fail('expected TokenException');
+        } catch (\Identvia\Sdk\Exception\TokenException $e) {
+            $this->assertSame('invalid_request', $e->error);
+        }
+    }
+
+    public function testCibaPollLifecycle(): void
+    {
+        $sdk = $this->sdk();
+        $r = $sdk->cibaAuthorize('ada@example.test', 'email', 'Desk 4 · 7Q2K', 120);
+        $this->assertSame(5, $r['interval']);
+        $this->assertSame('openid email', $this->idp->lastForm['scope']);
+        $this->assertSame('Desk 4 · 7Q2K', $this->idp->lastForm['binding_message']);
+        $id = $r['auth_req_id'];
+        $interval = $r['interval'];
+        $this->assertNull($sdk->cibaPoll($id, $interval));
+        $this->assertSame(5, $interval);
+        $this->idp->ciba[$id] = 'slow';
+        $this->assertNull($sdk->cibaPoll($id, $interval));
+        $this->assertSame(10, $interval, 'slow_down adds 5 seconds');
+        $this->idp->ciba[$id] = 'approved';
+        $t = $sdk->cibaPoll($id, $interval);
+        $this->assertNotNull($t);
+        $this->assertSame($this->idp->accessToken, $t->accessToken);
+    }
+
+    public function testCibaDeniedAndExpiredThrow(): void
+    {
+        $sdk = $this->sdk();
+        foreach (['denied' => 'access_denied', 'expired' => 'expired_token'] as $state => $error) {
+            $id = $sdk->cibaAuthorize('ada@example.test')['auth_req_id'];
+            $this->idp->ciba[$id] = $state;
+            try {
+                $sdk->cibaPoll($id);
+                $this->fail('expected TokenException');
+            } catch (\Identvia\Sdk\Exception\TokenException $e) {
+                $this->assertSame($error, $e->error);
+            }
+        }
+    }
+
+    public function testCibaIdTokenIsValidated(): void
+    {
+        $sdk = $this->sdk();
+        $id = $sdk->cibaAuthorize('ada@example.test')['auth_req_id'];
+        $this->idp->ciba[$id] = 'approved';
+        $this->idp->idTokenOverride = $this->idp->idToken(['aud' => 'oid_someone_else']);
+        $this->expectException(\Identvia\Sdk\Exception\ValidationException::class);
+        $sdk->cibaPoll($id);
+    }
+
+    public function testVerifyCibaPing(): void
+    {
+        $this->assertSame('req_1', Identvia::verifyCibaPing('Bearer tok_abc', '{"auth_req_id":"req_1"}', 'tok_abc'));
+        $this->expectException(\Identvia\Sdk\Exception\ValidationException::class);
+        Identvia::verifyCibaPing('Bearer tok_wrong', '{"auth_req_id":"req_1"}', 'tok_abc');
+    }
 }

@@ -33,7 +33,7 @@ use Identvia\Sdk\State\StateStore;
  */
 final class Identvia
 {
-    public const VERSION = '1.0.0';
+    public const VERSION = '1.1.0';
     public const DISCOVERY_TTL = 3600;
     public const JWKS_TTL = 3600;
     public const JWKS_REFETCH_INTERVAL = 60;
@@ -159,7 +159,7 @@ final class Identvia
     /**
      * Builds the URL to send the user to and remembers state, nonce and the PKCE verifier.
      *
-     * @param array{scopes?:list<string>, prompt?:string, max_age?:int, login_hint?:string, return_to?:string} $options
+     * @param array{scopes?:list<string>, prompt?:string, max_age?:int, login_hint?:string, return_to?:string, authorization_details?:list<array<string,mixed>>} $options
      */
     public function authorizationUrl(array $options = []): string
     {
@@ -185,6 +185,7 @@ final class Identvia
         $maxAge = isset($options['max_age']) ? max(0, (int) $options['max_age']) : null;
         if ($maxAge !== null) { $params['max_age'] = (string) $maxAge; }
         if (isset($options['login_hint'])) { $params['login_hint'] = substr((string) $options['login_hint'], 0, 254); }
+        if (isset($options['authorization_details'])) { $params['authorization_details'] = self::encodeDetails($options['authorization_details']); }
         $this->state->put($state, ['nonce' => $nonce, 'verifier' => $verifier, 'return_to' => $returnTo, 'max_age' => $maxAge, 'created' => $this->now()]);
         $ep = $this->endpoint('authorization_endpoint');
         return $ep . (str_contains($ep, '?') ? '&' : '?') . http_build_query($params, '', '&', PHP_QUERY_RFC3986);
@@ -318,6 +319,98 @@ final class Identvia
         if ($state !== null) { $p['state'] = $state; }
         $ep = $this->endpoint('end_session_endpoint');
         return $ep . (str_contains($ep, '?') ? '&' : '?') . http_build_query($p, '', '&', PHP_QUERY_RFC3986);
+    }
+
+    // ------------------------------------------------------------- delegation
+    public const GRANT_TOKEN_EXCHANGE = 'urn:ietf:params:oauth:grant-type:token-exchange';
+    public const GRANT_CIBA = 'urn:openid:params:grant-type:ciba';
+    public const TOKEN_TYPE_ACCESS = 'urn:ietf:params:oauth:token-type:access_token';
+    public const TOKEN_TYPE_JWT = 'urn:ietf:params:oauth:token-type:jwt';
+
+    /** RFC 9396: a JSON array of objects, each with a string "type". @param mixed $details */
+    private static function encodeDetails($details): string
+    {
+        if (!is_array($details) || !array_is_list($details) || $details === []) { throw new ConfigurationException('authorization_details must be a non-empty list of objects.'); }
+        foreach ($details as $d) {
+            if (!is_array($d) || !is_string($d['type'] ?? null) || $d['type'] === '') { throw new ConfigurationException('Each authorization_details entry needs a string "type".'); }
+        }
+        return (string) json_encode($details, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+    }
+
+    /**
+     * OAuth 2.0 Token Exchange (RFC 8693): trade an access token for a narrower, shorter-lived one, for another
+     * Identvia app ($audience = its client_id) or a resource. Pass an agent-signed $actorToken to name the agent
+     * (the result carries an "act" claim). Needs token exchange switched on for this environment.
+     *
+     * @param list<array<string,mixed>>|null $authorizationDetails narrow the RFC 9396 details (never widen)
+     */
+    public function tokenExchange(string $subjectToken, ?string $audience = null, ?string $scope = null, ?string $resource = null,
+        ?string $actorToken = null, ?array $authorizationDetails = null): TokenSet
+    {
+        $form = ['grant_type' => self::GRANT_TOKEN_EXCHANGE, 'subject_token' => $subjectToken, 'subject_token_type' => self::TOKEN_TYPE_ACCESS,
+            'requested_token_type' => self::TOKEN_TYPE_ACCESS];
+        if ($audience !== null) { $form['audience'] = $audience; }
+        if ($resource !== null) { $form['resource'] = $resource; }
+        if ($scope !== null) { $form['scope'] = $scope; }
+        if ($actorToken !== null) { $form['actor_token'] = $actorToken; $form['actor_token_type'] = self::TOKEN_TYPE_JWT; }
+        if ($authorizationDetails !== null) { $form['authorization_details'] = self::encodeDetails($authorizationDetails); }
+        $t = $this->tokenRequest($form);
+        if ($t->issuedTokenType !== self::TOKEN_TYPE_ACCESS) { throw new TokenException('invalid_response', 'Token exchange response has no issued_token_type.'); }
+        return $t;
+    }
+
+    /**
+     * Starts an OpenID CIBA request: Identvia asks the person (by email) to approve in their own inbox.
+     * Show the same $bindingMessage on your screen. In ping mode pass $clientNotificationToken (>= 128 bits).
+     *
+     * @param list<array<string,mixed>>|null $authorizationDetails
+     * @return array{auth_req_id:string, expires_in:int, interval:int}
+     */
+    public function cibaAuthorize(string $loginHint, string $scope = 'openid', ?string $bindingMessage = null, ?int $requestedExpiry = null,
+        ?string $clientNotificationToken = null, ?array $authorizationDetails = null): array
+    {
+        $scopes = array_values(array_unique(array_merge(['openid'], preg_split('/\s+/', trim($scope)) ?: [])));
+        $form = ['scope' => implode(' ', array_filter($scopes)), 'login_hint' => $loginHint];
+        if ($bindingMessage !== null) { $form['binding_message'] = $bindingMessage; }
+        if ($requestedExpiry !== null) { $form['requested_expiry'] = (string) max(1, $requestedExpiry); }
+        if ($clientNotificationToken !== null) { $form['client_notification_token'] = $clientNotificationToken; }
+        if ($authorizationDetails !== null) { $form['authorization_details'] = self::encodeDetails($authorizationDetails); }
+        $r = $this->post($this->endpoint('backchannel_authentication_endpoint'), $form);
+        if (!is_string($r['auth_req_id'] ?? null) || $r['auth_req_id'] === '') { throw new TokenException('invalid_response', 'CIBA response has no auth_req_id.'); }
+        return ['auth_req_id' => $r['auth_req_id'], 'expires_in' => (int) ($r['expires_in'] ?? 0), 'interval' => max(1, (int) ($r['interval'] ?? 5))];
+    }
+
+    /**
+     * Polls for the result of a CIBA request. Returns null while the person hasn't decided yet; wait $interval
+     * seconds before the next call (it grows by 5 when Identvia says slow_down). Throws TokenException with
+     * error access_denied or expired_token when it's over. The ID token is validated.
+     */
+    public function cibaPoll(string $authReqId, ?int &$interval = null): ?TokenSet
+    {
+        try {
+            $t = $this->tokenRequest(['grant_type' => self::GRANT_CIBA, 'auth_req_id' => $authReqId]);
+        } catch (TokenException $e) {
+            if ($e->error === 'authorization_pending') { return null; }
+            if ($e->error === 'slow_down') { $interval = ($interval ?? 5) + 5; return null; }
+            throw $e;
+        }
+        if ($t->idToken === null) { throw new ValidationException('Identvia did not return an ID token.'); }
+        $this->validator()->validate($t->idToken, ['access_token' => $t->accessToken]);
+        return $t;
+    }
+
+    /**
+     * CIBA ping mode: checks a notification Identvia POSTed to your endpoint and returns its auth_req_id.
+     * $expectedToken is the client_notification_token you sent for that request. Answer 204, then call cibaPoll().
+     */
+    public static function verifyCibaPing(string $authorizationHeader, string $body, string $expectedToken): string
+    {
+        if (!preg_match('/^Bearer\s+(\S+)$/i', trim($authorizationHeader), $m) || !hash_equals($expectedToken, $m[1])) {
+            throw new ValidationException('CIBA ping has a wrong or missing bearer token.');
+        }
+        $d = json_decode($body, true);
+        if (!is_array($d) || !is_string($d['auth_req_id'] ?? null) || $d['auth_req_id'] === '') { throw new ValidationException('CIBA ping body has no auth_req_id.'); }
+        return $d['auth_req_id'];
     }
 
     public function issuer(): string { return $this->issuer; }

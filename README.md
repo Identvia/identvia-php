@@ -8,8 +8,8 @@ The only dependency is [firebase/php-jwt](https://github.com/firebase/php-jwt), 
 ## Install
 
 * Composer: `composer require identvia/identvia-php`
-* No Composer or SSH: download `identvia-php-1.0.0.zip` from your Identvia server
-  (`/sdk/php/identvia-php-1.0.0.zip`). It includes `vendor/`. Upload it beside your site and
+* No Composer or SSH: download `identvia-php-1.1.0.zip` from your Identvia server
+  (`/sdk/php/identvia-php-1.1.0.zip`). It includes `vendor/`. Upload it beside your site and
   `require __DIR__ . '/identvia-php/vendor/autoload.php';`
 
 ## Use
@@ -33,6 +33,26 @@ $_SESSION['user'] = ['sub' => $signIn->sub(), 'email' => $signIn->email()];
 
 Store `sub`, not the email: it is stable and private to your app (pairwise).
 Full guide: `/developers/docs/php` on your Identvia server.
+
+## Delegation (token exchange, CIBA, rich authorization requests)
+
+Switch the features on for your environment in the developer console (Delegation card) first.
+
+```php
+// RFC 8693: a narrower, short-lived token for another Identvia app; $agentJwt (optional) names the agent → "act" claim
+$t = $identvia->tokenExchange($accessToken, audience: 'oid_other_app', scope: 'openid email', actorToken: $agentJwt);
+
+// OpenID CIBA, poll mode
+$req = $identvia->cibaAuthorize('person@example.com', scope: 'email', bindingMessage: 'Desk 4 · 7Q2K');
+$interval = $req['interval'];
+while (($tokens = $identvia->cibaPoll($req['auth_req_id'], $interval)) === null) { sleep($interval); }
+
+// CIBA ping mode: in your notification endpoint
+$authReqId = Identvia\Sdk\Identvia::verifyCibaPing($_SERVER['HTTP_AUTHORIZATION'] ?? '', file_get_contents('php://input'), $storedToken);
+
+// RFC 9396 on sign-in
+$identvia->redirectToSignIn(['authorization_details' => [['type' => 'agent_task', 'actions' => ['read']]]]);
+```
 
 ## Tests
 

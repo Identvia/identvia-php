@@ -30,6 +30,9 @@ final class FakeIdentvia implements HttpClient
     public ?string $idTokenOverride = null;
     public array $userinfo = [];
     public int $now;
+    /** CIBA: auth_req_id => 'pending' | 'slow' | 'approved' | 'denied' | 'expired' */
+    public array $ciba = [];
+    public ?array $lastForm = null;
 
     public function __construct()
     {
@@ -83,6 +86,7 @@ final class FakeIdentvia implements HttpClient
                     'userinfo_endpoint' => self::ISSUER . '/oauth/userinfo', 'jwks_uri' => self::ISSUER . '/oauth/jwks.json',
                     'revocation_endpoint' => self::ISSUER . '/oauth/revoke', 'end_session_endpoint' => self::ISSUER . '/oauth/logout',
                     'authorization_response_iss_parameter_supported' => true,
+                    'backchannel_authentication_endpoint' => self::ISSUER . '/oauth/bc-authorize',
                 ], $this->discoveryOverride));
             case '/oauth/jwks.json':
                 return $json(200, ['keys' => array_map(fn ($k) => $this->keys[$k][1], $this->publishedKids)]);
@@ -94,6 +98,28 @@ final class FakeIdentvia implements HttpClient
                     || (($f['client_id'] ?? '') === self::CLIENT && !isset($f['client_secret']) && $auth === '');
                 if (!$clientOk) { return $json(401, ['error' => 'invalid_client']); }
                 if ($this->tokenError) { return $json(400, $this->tokenError); }
+                $this->lastForm = $f;
+                if (($f['grant_type'] ?? '') === 'urn:ietf:params:oauth:grant-type:token-exchange') {
+                    if (($f['subject_token'] ?? '') !== $this->accessToken || ($f['subject_token_type'] ?? '') !== 'urn:ietf:params:oauth:token-type:access_token') {
+                        return $json(400, ['error' => 'invalid_request', 'error_description' => 'bad subject_token']);
+                    }
+                    $r = ['access_token' => 'at_exchanged', 'issued_token_type' => 'urn:ietf:params:oauth:token-type:access_token', 'token_type' => 'Bearer',
+                        'expires_in' => 300, 'scope' => $f['scope'] ?? 'openid'];
+                    if (isset($f['authorization_details'])) { $r['authorization_details'] = json_decode($f['authorization_details'], true); }
+                    return $json(200, $r);
+                }
+                if (($f['grant_type'] ?? '') === 'urn:openid:params:grant-type:ciba') {
+                    $st = $this->ciba[$f['auth_req_id'] ?? ''] ?? null;
+                    return match ($st) {
+                        null => $json(400, ['error' => 'invalid_grant']),
+                        'pending' => $json(400, ['error' => 'authorization_pending']),
+                        'slow' => $json(400, ['error' => 'slow_down']),
+                        'denied' => $json(400, ['error' => 'access_denied']),
+                        'expired' => $json(400, ['error' => 'expired_token']),
+                        default => $json(200, ['access_token' => $this->accessToken, 'token_type' => 'Bearer', 'expires_in' => 900, 'scope' => 'openid email',
+                            'id_token' => $this->idTokenOverride ?? $this->idToken(), 'refresh_token' => 'rt_1']),
+                    };
+                }
                 if (($f['grant_type'] ?? '') === 'authorization_code') {
                     $c = $this->codes[$f['code'] ?? ''] ?? null;
                     unset($this->codes[$f['code'] ?? '']);
@@ -108,6 +134,14 @@ final class FakeIdentvia implements HttpClient
                     return $json(200, ['access_token' => $this->accessToken, 'token_type' => 'Bearer', 'expires_in' => 900, 'id_token' => $this->idToken(), 'refresh_token' => 'rt_2']);
                 }
                 return $json(400, ['error' => 'unsupported_grant_type']);
+            case '/oauth/bc-authorize':
+                parse_str((string) $body, $f);
+                $this->lastForm = $f;
+                if (($headers['Authorization'] ?? '') !== 'Basic ' . base64_encode(self::CLIENT . ':' . self::SECRET)) { return $json(401, ['error' => 'invalid_client']); }
+                if (!str_contains(' ' . ($f['scope'] ?? '') . ' ', ' openid ')) { return $json(400, ['error' => 'invalid_scope']); }
+                $id = 'req_' . bin2hex(random_bytes(8));
+                $this->ciba[$id] = 'pending';
+                return $json(200, ['auth_req_id' => $id, 'expires_in' => 120, 'interval' => 5]);
             case '/oauth/userinfo':
                 if (($headers['Authorization'] ?? '') !== 'Bearer ' . $this->accessToken) { return $json(401, ['error' => 'invalid_token']); }
                 return $json(200, $this->userinfo ?: ['sub' => 'pw_user_123', 'email' => 'ada@example.test']);
