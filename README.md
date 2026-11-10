@@ -1,5 +1,10 @@
 # identvia/identvia-php
 
+[![Packagist Version](https://img.shields.io/packagist/v/identvia/identvia-php)](https://packagist.org/packages/identvia/identvia-php)
+[![PHP](https://img.shields.io/packagist/dependency-v/identvia/identvia-php/php)](https://packagist.org/packages/identvia/identvia-php)
+[![CI](https://github.com/Identvia/identvia-php/actions/workflows/ci.yml/badge.svg)](https://github.com/Identvia/identvia-php/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Sign in with Identvia for PHP 8.1+. OpenID Connect authorization code flow with PKCE (S256), `state` and
 `nonce`, RFC 9207 `iss` check, ID token validation against Identvia's JWKS (cached, key-rotation aware),
 userinfo, refresh-token rotation and revocation. No framework needed; works on plain shared hosting.
